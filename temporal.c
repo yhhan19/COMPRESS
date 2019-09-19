@@ -45,8 +45,11 @@ About the implementation of this algorithm:
         re-written in other languages like Java or Python.
         Due to the precision limitations, 
         errors may occur when tau or eta is close to 0.
-        Notwithstanding, it is good when they are larger than 0.1,
-        which is enough for real-world applications.
+        Furthermore, it may leads to the problem 
+        that differences between the input and the output 
+        exceed the error bounds a little, 
+        which is mainly because of line intersection calculation.
+        Notwithstanding, it is good for real-world applications.
 
 This program should only be shared within the MDM group.
 Do NOT make it public without the permission of Prof. Sun.
@@ -60,12 +63,13 @@ yunhenghan19 at gmail dot com.
 #include <string.h>
 #include <assert.h>
 
-#define MAX_vertices 2000000
+#define MAX_vertices 5000000
 #define MAX_pointer_buffers 10
 #define EPS 1e-8
 #define INF  1e8
 #define MONOTONE_ONLY 1
-#define SKIP_DP_N 20000
+#define SKIP_DP_N 100000
+#define SHOW_DETAIL 0
 
 typedef struct sp_record {
     struct vertex *parent;
@@ -132,15 +136,14 @@ typedef struct series {
 
 void ***pointer_buffers;
 int *avail_pointer_buffer, max_buffers,
-    buffer_count, vertex_count[2], edge_count[2], facet_count[2],
+    bst_node_count, vertex_count[2], edge_count[2], facet_count[2],
     funnel_count[2], chain_node_count[2], window_count, 
-    VERTEX_SEARCH_COUNT, FACET_SEARCH_COUNT, VISITED_COUNT, 
-    TIME_DFS, TIME_PRETRI, TIME_RETRI, 
+    VERTEX_SEARCH_COUNT, FACET_SEARCH_COUNT, 
     START_TIME;
 char string_buffer[65536];
 bst_node *BST_NULL;
 edge *SOURCE, *DESTINATION;
-vertex *last_vertex;
+window *last_win;
 
 void handle_exception(int assertion, char *message) {
     if (! assertion) 
@@ -181,17 +184,27 @@ double cross(vertex *v1, vertex *v2, vertex *u1, vertex *u2) {
     return x1 * y2 - x2 * y1;
 }
 
-double xat(edge *e, double y) {
-    double x1 = e->from->x, y1 = e->from->y, 
-        x2 = e->to->x, y2 = e->to->y;
-    int dy = sgn(y1 - y2);
-    if (dy == 0) return x1;
-    return (y - y1) / (y2 - y1) * (x2 - x1) + x1;
+double xat(double x0, double y0, double x1, double y1, double y) {
+    int dy = sgn(y1 - y0);
+    if (dy == 0) return x0;
+    if (dabs(y - y0) > dabs(y1 - y)) {
+        double r = (y - y0) / (y1 - y0);
+        return x0 + (x1 - x0) * r;
+    }
+    else {
+        double r = (y1 - y) / (y1 - y0);
+        return x1 - (x1 - x0) * r;
+    }
+}
+
+double xat_2(edge *e, double y) {
+    return xat(e->from->x, e->from->y, e->to->x, e->to->y, y);
 }
 
 double yat(double x0, double y0, double x1, double y1, double x) {
-    assert(x0 < x && x < x1);
-    if (x - x0 > x1 - x) {
+    int dx = sgn(x1 - x0);
+    if (dx == 0) return y0;
+    if (dabs(x - x0) > dabs(x1 - x)) {
         double r = (x - x0) / (x1 - x0);
         return y0 + (y1 - y0) * r;
     }
@@ -404,7 +417,8 @@ vertex *lines_intersect(
     double cr23 = v2->x * v3->y - v2->y * v3->x;
     double x = (cr01 * (v2->x - v3->x) - (v0->x - v1->x) * cr23) / cr;
     double y = (cr01 * (v2->y - v3->y) - (v0->y - v1->y) * cr23) / cr;
-    return new_vertex(x, y, 0);
+    vertex *v = new_vertex(x, y, 0);
+    return v;
 }
 
 void new_pointer_buffers() {
@@ -428,7 +442,9 @@ void free_pointer_buffers() {
         free(pointer_buffers[i]);
     }
     free(pointer_buffers);
-    printf("   - pointer buffers used = %d\n", max_buffers);
+    if (SHOW_DETAIL) {
+        printf("   - %d pointer buffers used\n", max_buffers);
+    }
 }
 
 void** get_buffer() {
@@ -552,7 +568,7 @@ void print_facet(facet *f) {
 
 bst_node *new_bst_node(edge *e) {
     bst_node *b = (bst_node *) malloc(sizeof(bst_node));
-    buffer_count ++;
+    bst_node_count ++;
     b->e = e;
     b->left = b->right = BST_NULL;
     b->h = 0;
@@ -561,7 +577,7 @@ bst_node *new_bst_node(edge *e) {
 
 void free_bst_node(bst_node *b) {
     free(b);
-    buffer_count --;
+    bst_node_count --;
 }
 
 void new_bst() {
@@ -572,7 +588,7 @@ void new_bst() {
 
 void free_bst() {
     free_bst_node(BST_NULL);
-    assert(buffer_count == 0);
+    assert(bst_node_count == 0);
 }
 
 void update(bst_node *root) {
@@ -623,7 +639,7 @@ bst_node *bst_insert(bst_node *root, edge *e, double y) {
         bst_node *temp = new_bst_node(e);
         return temp;
     }
-    double xe = xat(e, y), xroot = xat(root->e, y);
+    double xe = xat_2(e, y), xroot = xat_2(root->e, y);
     if (xe < xroot)
         root->left = bst_insert(root->left, e, y);
     else
@@ -664,7 +680,7 @@ bst_node *bst_delete(bst_node *root, edge *e, double y) {
         root = re_balance(root);
         return root;
     }
-    double xe = xat(e, y), xroot = xat(root->e, y);
+    double xe = xat_2(e, y), xroot = xat_2(root->e, y);
     if (xe < xroot)
         root->left = bst_delete(root->left, e, y);
     else
@@ -676,7 +692,7 @@ bst_node *bst_delete(bst_node *root, edge *e, double y) {
 
 bst_node *search_prec(bst_node *root, double x, double y) {
     if (root == BST_NULL) return BST_NULL;
-    double xroot = xat(root->e, y);
+    double xroot = xat_2(root->e, y);
     if (x <= xroot)
         return search_prec(root->left, x, y);
     bst_node *temp = search_prec(root->right, x, y);
@@ -695,7 +711,7 @@ int sprint_bst(char *string_buffer, bst_node *root, double y) {
         len += sprint_bst(string_buffer, root->left, y);
     len += sprintf(string_buffer + len, "<");
     len += sprint_edge(string_buffer + len, root->e); 
-    len += sprintf(string_buffer + len, "%.2lf> ", xat(root->e, y));
+    len += sprintf(string_buffer + len, "%.2lf> ", xat_2(root->e, y));
     if (root->right != BST_NULL) 
         len += sprint_bst(string_buffer + len, root->right, y);
     return len;
@@ -864,8 +880,8 @@ series *new_series_from(char *file_name) {
     for (i = 0; i < N; i ++) 
         scanf("%lf%lf", s->list[i], s->list[i] + 1);
     fclose(fin);
-    printf("     - series length = %d\n", s->N);
-    printf("   - series loaded\n");
+    printf("   - series length = %d\n", s->N);
+    printf(" - series loaded\n");
     return s;
 }
 
@@ -881,10 +897,10 @@ series *gen_series(int N, double dx, double dy) {
         s->list[i][0] = x;
         s->list[i][1] = y;
     }
-    printf("     - sampling rate <= %lf, velocity <= %lf\n", 
+    printf("   - sampling rate <= %lf, velocity <= %lf\n", 
         dy, dx / dy);
-    printf("     - series length = %d\n", s->N);
-    printf("   - series generated - %dms\n", clock() - START_TIME);
+    printf("   - series length = %d\n", s->N);
+    printf(" - series generated - %dms\n", clock() - START_TIME);
     START_TIME = clock();
     return s;
 }
@@ -896,7 +912,66 @@ void print_series(series *s) {
     printf("\n");
 }
 
-int greedy_link_path(series *s, double tau, double eta) {
+void check_result(series *s, series *t, double tau, double eta) {
+    double eta_0 = 0;
+    int i, j;
+    for (i = 0, j = 0; i < s->N && j < t->N; ) {
+        if (s->list[i][0] < t->list[j][0]) {
+            if (j != 0) {
+                double y = yat(t->list[j - 1][0], t->list[j - 1][1], 
+                    t->list[j][0], t->list[j][1], s->list[i][0]);
+                double delta = dabs(y - s->list[i][1]);
+                if (delta > eta_0) {
+                    eta_0 = delta;
+                    //if (delta > eta) printf("%d %d\n", i, j);
+                }
+            }
+            i ++;
+        }
+        else {
+            if (i != 0) {
+                double y = yat(s->list[i - 1][0], s->list[i - 1][1], 
+                    s->list[i][0], s->list[i][1], t->list[j][0]);
+                double delta = dabs(y - t->list[j][1]);
+                if (delta > eta_0) {
+                    eta_0 = delta;
+                    //if (delta > eta) printf("%d %d\n", i, j);
+                }
+            }
+            j ++;
+        }
+    }
+    double tau_0 = 0;
+    for (i = 0, j = 0; i < s->N && j < t->N; ) {
+        if (s->list[i][1] < t->list[j][1]) {
+            if (j != 0) {
+                double x = xat(t->list[j - 1][0], t->list[j - 1][1], 
+                    t->list[j][0], t->list[j][1], s->list[i][1]);
+                double delta = dabs(x - s->list[i][0]);
+                if (delta > tau_0) {
+                    tau_0 = delta;
+                    //if (delta > tau) printf("%d %d\n", i, j);
+                }
+            }
+            i ++;
+        }
+        else {
+            if (i != 0) {
+                double x = xat(s->list[i - 1][0], s->list[i - 1][1], 
+                    s->list[i][0], s->list[i][1], t->list[j][1]);
+                double delta = dabs(x - t->list[j][0]);
+                if (delta > tau_0) {
+                    tau_0 = delta;
+                    //if (delta > tau) printf("%d %d\n", i, j);
+                }
+            }
+            j ++;
+        }
+    }
+    printf("     - error: tau = %lf eta = %lf\n", tau_0, eta_0);
+}
+
+series *greedy_link_path(series *s, double tau, double eta) {
     vertex **result = (vertex **) get_buffer();
     int i = 1, j = 0, k = 0;
     vertex low, high, origin;
@@ -927,17 +1002,19 @@ int greedy_link_path(series *s, double tau, double eta) {
         high.x = 0; high.y = 1;
     }
     result[k ++] = new_vertex(s->list[s->N - 1][0], s->list[s->N - 1][1], 0);
+    series *t = new_series(k);
     for (i = 0; i < k; i ++) {
-        // output result[i];
-        assert(result[i] != NULL);
+        t->list[i][0] = result[i]->x;
+        t->list[i][1] = result[i]->y;
         free_vertex(result[i]);
     }
-    printf("     - links (greedy) = %d\n", k);
-    printf("     - compression ratio (greedy) = %lf\n", (double) s->N / k);
     return_buffer((void **) result);
+    printf("     - links = %d\n", k);
+    printf("     - compression ratio = %lf\n", (double) s->N / k);
+    check_result(s, t, tau, eta);
     printf("   - baseline greedy computed - %dms\n", clock() - START_TIME);
     START_TIME = clock();
-    return k;
+    return t;
 }
 
 void DP_link_path_init_visible(
@@ -974,7 +1051,7 @@ void DP_link_path_init_visible(
     }
 }
 
-int DP_link_path(series *s, double tau, double eta) {
+series *DP_link_path(series *s, double tau, double eta) {
     if (s->N > SKIP_DP_N) {
         printf("   - baseline DP skipped\n");
         return ;
@@ -1012,23 +1089,25 @@ int DP_link_path(series *s, double tau, double eta) {
         i = prec[i];
     }
     assert(j == 0);
+    series *t = new_series(opt[s->N - 1]);
     for (i = 0; i < opt[s->N - 1]; i ++) {
-        // output result[i];
-        assert(result[i] != NULL);
+        t->list[i][0] = result[i]->x;
+        t->list[i][1] = result[i]->y;
         free_vertex(result[i]);
     }
-    printf("     - links (DP) = %d\n", opt[s->N - 1]);
-    printf("     - compression ratio (DP) = %lf\n", 
+    return_buffer((void **) result);
+    printf("     - links = %d\n", opt[s->N - 1]);
+    printf("     - compression ratio = %lf\n", 
         (double) s->N / opt[s->N - 1]);
+    check_result(s, t, tau, eta);
     for (i = 0; i < s->N; i ++) 
         free(visible[i]);
     free(visible);
     free(opt);
     free(prec);
-    return_buffer((void **) result);
     printf("   - baseline DP computed - %dms\n", clock() - START_TIME);
     START_TIME = clock();
-    return j;
+    return t;
 }
 
 void segments_intersect(double x0, double y0, double y1, 
@@ -1299,6 +1378,10 @@ int traverse_polytope(polytope *p, facet **queue) {
 }
 
 void free_polytope(polytope *p) {
+    if (SHOW_DETAIL) {
+        printf("     - %d vertices %d edges %d facets remain\n", 
+            vertex_count[0], edge_count[0], facet_count[0 ]);
+    }
     facet **queue = (facet **) get_buffer();
     int tail = traverse_polytope(p, queue);
     int i;
@@ -1320,8 +1403,10 @@ void free_polytope(polytope *p) {
     }
     free(p->vertices);
     free(p);
-    printf("     - %d vertices %d edges %d facets allocated\n", 
-        vertex_count[1], edge_count[1], facet_count[1]);
+    if (SHOW_DETAIL) {
+        printf("     - %d vertices %d edges %d facets allocated\n", 
+            vertex_count[1], edge_count[1], facet_count[1]);
+    }
     int len = sprintf(string_buffer, 
         "memory leak detected: %d vertices %d edges %d facets", 
         vertex_count[0], edge_count[0], facet_count[0]);
@@ -1360,11 +1445,13 @@ void check_triangulation(polytope *p) {
         if (maxS < 0 || (A > 0 && A > maxS)) maxS = A;
         queue[i]->visited = 0;
     }
-    printf("     - %d vertex searches and %d facet searches done\n", 
-        VERTEX_SEARCH_COUNT, FACET_SEARCH_COUNT);
-    VERTEX_SEARCH_COUNT = FACET_SEARCH_COUNT = 0;
-    printf("     - size diff = %lf - %lf = %lf\n", S0, S1, (S0 - S1));
-    printf("     - triangle size range = [%lf-%lf]\n", minS, maxS);
+    if (SHOW_DETAIL) {
+        printf("     - %d vertex searches and %d facet searches\n", 
+            VERTEX_SEARCH_COUNT, FACET_SEARCH_COUNT);
+        VERTEX_SEARCH_COUNT = FACET_SEARCH_COUNT = 0;
+        printf("     - triangle size range = [%lf-%lf]\n", minS, maxS);
+        printf("     - size diff = %lf - %lf = %lf\n", S0, S1, (S0 - S1));
+    }
     printf("   - polygon triangulated - %dms\n", clock() - START_TIME);
     START_TIME = clock();
     int assertion = (tail - 1 == p->N - 2) 
@@ -1678,6 +1765,7 @@ void triangulate_monotone(facet *f) {
     start->from->side = 3;
     queue[tail ++] = start->from;
     while (left->to != end->from && right->from != end->from) {
+        /*
         sprintf_disorder(string_buffer, left->to, left->next->to);
         handle_exception(
             compare_point_cartesian(left->to, left->next->to) == 1, 
@@ -1686,6 +1774,7 @@ void triangulate_monotone(facet *f) {
         handle_exception(
             compare_point_cartesian(right->from, right->prev->from) == 1, 
             string_buffer);
+        */
         if (left->to->y > right->from->y) {
             left->to->side = 1;
             queue[tail ++] = left->to;
@@ -1698,19 +1787,23 @@ void triangulate_monotone(facet *f) {
         }
     }
     while (left->to != end->from) {
+        /*
         sprintf_disorder(string_buffer, left->to, left->next->to);
         handle_exception(
             compare_point_cartesian(left->to, left->next->to) == 1, 
             string_buffer);
+        */
         left->to->side = 1;
         queue[tail ++] = left->to;
         left = left->next;
     }
     while (right->from != end->from) {
+        /*
         sprintf_disorder(string_buffer, right->from, right->prev->from);
         handle_exception(
             compare_point_cartesian(right->from, right->prev->from) == 1, 
             string_buffer);
+        */
         right->from->side = 2;
         queue[tail ++] = right->from;
         right = right->prev;
@@ -1723,13 +1816,13 @@ void triangulate_monotone(facet *f) {
     stack[top ++] = queue[1];
     int i;
     for (i = 2; i < tail - 1; i ++) {
-        assert(top > 0);
+        //assert(top > 0);
         if (stack[top - 1]->side != queue[i]->side) {
             int j;
             for (j = 1; j < top; j ++) 
                 connect_vertices_2(queue[i], stack[j], f);
             top = 0;
-            assert(i - 1 > 0);
+            //assert(i - 1 > 0);
             stack[top ++] = queue[i - 1];
             stack[top ++] = queue[i];
         }
@@ -1938,7 +2031,7 @@ void link_to_parent(vertex *v0, vertex *v1, int i) {
                 v1->sp[i]->convex = v0->sp[i]->convex & 1;
                 break;
             default: 
-                assert(1);
+                assert(0);
                 break;
         }
     }
@@ -2141,10 +2234,12 @@ int bi_depth_first_traverse(polytope *p,
     edge *e, funnel *fn0, funnel *fn1, 
     window **queue, int *tail) 
 {
+    /*
     assert(left_end(fn0) == e->from 
         && right_end(fn0) == e->to);
     assert(left_end(fn1) == e->from 
         && right_end(fn1) == e->to);
+    */
     int ret = 0;
     chain_node *prev_cn, *cn;
     vertex *tan[2][2];
@@ -2169,8 +2264,10 @@ int bi_depth_first_traverse(polytope *p,
     funnel *fn0_new = NULL, *fn1_new = NULL;
     int order0 = -1, order1 = -1;
     if (fn0->left_chain == NULL) {
+        /*
         assert(fn0->right_chain != NULL);
         assert(fn0->right_chain->next == NULL);
+        */
         link_to_parent(fn0->apex, v, 0);
         fn0_new = new_funnel(fn0->apex);
         fn0_new->right_chain = new_chain_node(v);
@@ -2181,8 +2278,10 @@ int bi_depth_first_traverse(polytope *p,
         order0 = 0;
     }
     else if (fn0->right_chain == NULL) {
+        /*
         assert(fn0->left_chain != NULL);
         assert(fn0->left_chain->next == NULL);
+        */
         link_to_parent(fn0->apex, v, 0);
         fn0->right_chain = new_chain_node(v);
         //depth_first_traverse(p, e->prev->twin, fn0);
@@ -2263,8 +2362,10 @@ int bi_depth_first_traverse(polytope *p,
     }
     
     if (fn1->left_chain == NULL) {
+        /*
         assert(fn1->right_chain != NULL);
         assert(fn1->right_chain->next == NULL);
+        */
         link_to_parent(fn1->apex, v, 1);
         fn1_new = new_funnel(fn1->apex);
         fn1_new->right_chain = new_chain_node(v);
@@ -2275,8 +2376,10 @@ int bi_depth_first_traverse(polytope *p,
         order1 = 0;
     }
     else if (fn1->right_chain == NULL) {
+        /*
         assert(fn1->left_chain != NULL);
         assert(fn1->left_chain->next == NULL);
+        */
         link_to_parent(fn1->apex, v, 1);
         fn1->right_chain = new_chain_node(v);
         //depth_first_traverse(p, e->prev->twin, fn1);
@@ -2366,7 +2469,7 @@ int bi_depth_first_traverse(polytope *p,
             fn[0][0] = fn0_new; fn[0][1] = fn1;
             fn[1][0] = fn0; fn[1][1] = fn1_new;
         }
-        else assert(1);
+        else assert(0);
     }
     else if (order0 == 1){
         if (order1 == 0) {
@@ -2377,9 +2480,9 @@ int bi_depth_first_traverse(polytope *p,
             fn[0][0] = fn0; fn[0][1] = fn1;
             fn[1][0] = fn0_new; fn[1][1] = fn1_new;
         }
-        else assert(1);
+        else assert(0);
     }
-    else assert(1);
+    else assert(0);
 
     if ((e->from->sp[0]->convex & 2) > 0 && 
         (v->sp[1]->convex & 1) > 0) 
@@ -2404,6 +2507,16 @@ int bi_depth_first_traverse(polytope *p,
                 cache_window(
                     p, tan[0][1], l0, NULL, e0, 
                     queue, tail, to_split);
+                if (last_win == NULL && e->prev == DESTINATION) {
+                    ret = 1;
+                    last_win = new_window(p, queue[*tail - 1]->v0, queue[*tail - 1]->v1, NULL, NULL);
+                }
+            }
+            else {
+                if (last_win == NULL && e->prev == DESTINATION) {
+                    ret = 1;
+                    last_win = new_window(p, tan[0][1], tan[1][1], NULL, NULL);
+                }
             }
             if (l1 != NULL) {
                 // tan[0][1] - l0 = l1 - tan[1][0]
@@ -2417,10 +2530,6 @@ int bi_depth_first_traverse(polytope *p,
                         p, l1, tan[1][0], e0, NULL, 
                         queue, tail, to_split);
                 }
-            }
-            if (e->prev == DESTINATION) {
-                ret = 1;
-                last_vertex = l0;
             }
         }
     }
@@ -2461,10 +2570,16 @@ int bi_depth_first_traverse(polytope *p,
                 cache_window(
                     p, r1, tan[1][0], e1, NULL, 
                     queue, tail, to_split);
+                if (last_win == NULL && e->next == DESTINATION) {
+                    ret = 1;
+                    last_win = new_window(p, queue[*tail - 1]->v0, queue[*tail - 1]->v1, NULL, NULL);
+                }
             }
-            if (e->next == DESTINATION) {
-                ret = 1;
-                last_vertex = r1;
+            else {
+                if (last_win == NULL && e->next == DESTINATION) {
+                    ret = 1;
+                    last_win = new_window(p, tan[1][0], tan[0][0], NULL, NULL);
+                }
             }
         }
     }
@@ -2587,9 +2702,12 @@ edge *match_edge(vertex *v0, vertex *v1) {
     return NULL;
 }
 
-int link_path_from(
-    polytope *p, vertex *s0, vertex *s1, vertex **result) 
-{
+series *link_path_from(polytope *p, vertex *s0, vertex *s1) {
+    int VISITED_COUNT = 0;
+    int TIME_DFS = 0;
+    int TIME_BFS = 0;
+    int TIME_RETRI = 0;
+
     window **queue = (window **) get_buffer();
     facet **stack = (facet **) get_buffer();
     facet **queue_0 = (facet **) get_buffer();
@@ -2599,7 +2717,7 @@ int link_path_from(
     cache_window(p, s0, s1, NULL, NULL, queue, & tail, 0);
     queue[0]->depth = 0;
     queue[0]->parent = NULL;
-    window *last_win = NULL;
+    last_win = NULL;
     while (head < tail) {
         window *win = queue[head ++];
         // bi-dfs to compute the visibie sub-polygon \
@@ -2620,12 +2738,28 @@ int link_path_from(
         if (e->left_hand != p->external)
             if (bi_depth_first_traverse(
                 p, e, fn0, fn1, queue, & tail))
-                    last_win = win;
+            {
+                if (last_win->parent == NULL) {
+                    vertex *v = lines_intersect(
+                        last_win->v0, last_win->v1, 
+                        win->v0, win->v1);
+                    if (v == NULL) 
+                    {
+                        last_win->parent = win->parent;
+                        last_win->depth = win->depth;
+                    }
+                    else {
+                        last_win->parent = win;
+                        last_win->depth = win->depth + 1;
+                        free_vertex(v);
+                    }
+                }
+            }
         free_funnel(fn0);
         free_funnel(fn1);
         TIME_DFS += clock();
         //bfs for facets corresponding to the windows
-        TIME_PRETRI -= clock();
+        TIME_BFS -= clock();
         int i, head_0 = 0, tail_0 = 0;
         for (i = last_tail; i < tail; i ++) {
             window *w = queue[i];
@@ -2637,7 +2771,7 @@ int link_path_from(
                 e = e0 = w->v0->head;
             else if (w->e1 == NULL)
                 e = e0 = w->v1->head;
-            else assert(1);
+            else assert(0);
             do {
                 if (e->left_hand != p->external &&
                     to_visit(e->left_hand, w->v0, w->v1)) 
@@ -2709,7 +2843,7 @@ int link_path_from(
                 assert(w->e1->left_hand == p->external);
                 split_edge_at(& (w->e1), w->v1);
             }
-            else assert(1);
+            else assert(0);
         }
         // re-triangulate new facets
         for (i = last_tail; i < tail; i ++) {
@@ -2727,61 +2861,68 @@ int link_path_from(
                         w->e1->twin->left_hand, 
                         NULL, w->e1->twin);
                 }
-                else assert(1);
+                else assert(0);
                 assert(e->next->next != e);
-                TIME_PRETRI += clock();
+                TIME_BFS += clock();
                 TIME_RETRI -= clock();
                 if (MONOTONE_ONLY)
                     triangulate_monotone(e->left_hand);
                 else 
                     triangulate_facet(e->left_hand);
                 TIME_RETRI += clock();
-                TIME_PRETRI -= clock();
+                TIME_BFS -= clock();
                 e->twin->left_hand->visited = 1;
                 stack[top ++] = e->twin->left_hand;
             }
         }
-        TIME_PRETRI += clock();
+        TIME_BFS += clock();
+    }
+    if (SHOW_DETAIL) {
+        printf("     - %d vertex searches and %d facet searches\n", 
+            VERTEX_SEARCH_COUNT, FACET_SEARCH_COUNT);
+        printf("     - %d facets visited\n", VISITED_COUNT);
+    }
+    if (SHOW_DETAIL) {
+        printf("     - %d windows allocated\n", tail - 1);
+        printf("     - %dms for DFS, %dms for BFS and %dms for re-triangulation\n", 
+            TIME_DFS, TIME_BFS, TIME_RETRI);
     }
 
-    printf("     - %d vertex searches and %d facet searches done\n", 
-        VERTEX_SEARCH_COUNT, FACET_SEARCH_COUNT);
-    printf("     - %d facets visited\n", VISITED_COUNT);
-    assert(last_win != NULL);
-    int links = last_win->depth + 1;
-    printf("     - links (geometry) = %d\n", links);
     // obtain a result polyline through backtracking
-    int len = 0;
+    int i = last_win->depth + 1;
+    series *result = new_series(i);
     window *prev_win = NULL, *cur_win = last_win;
     while (cur_win != NULL) {
         // the polyline vertex of the current depth is\
         the intersection of the current window and the previous window
         vertex *res;
         if (prev_win == NULL) {
-            // use the vertex stored - *last_vertex
-            res = new_vertex(last_vertex->x, last_vertex->y, 0);
+            // intersection of the line <cur_win->v0, cur_win->v1>\
+            and the edge DESTINATION
+            res = lines_intersect(
+                cur_win->v0, cur_win->v1, 
+                DESTINATION->from, DESTINATION->to);
         }
         else {
-            // intersection or the line <cur_win->v0, cur_win->v1>\
+            // intersection of the line <cur_win->v0, cur_win->v1>\
             and the line <prev_win->v0, prev_win->v1>
             res = lines_intersect(
                 cur_win->v0, cur_win->v1, 
                 prev_win->v0, prev_win->v1);
         }
-        assert(res != NULL);
-        result[len ++] = res;
-        links --;
+        -- i;
+        result->list[i][0] = res->x;
+        result->list[i][1] = res->y;
+        free_vertex(res);
         prev_win = cur_win;
         cur_win = cur_win->parent;
     }
-    assert(links == 0);
-    printf("     - compression ratio (geometry) = %lf\n", 
-        (double) p->series_len / queue[tail - 1]->depth);
-    printf("     - %d windows allocated\n", tail - 1);
-    printf("     - %dms for DFS and %dms + %dms for re-triangulation\n", 
-        TIME_DFS, TIME_PRETRI, TIME_RETRI);
-    printf("   - link distance computed - %dms\n", clock() - START_TIME);
-    START_TIME = clock();
+    free_window(last_win);
+    assert(i == 0);
+
+    printf("     - links = %d\n", result->N);
+    printf("     - compression ratio = %lf\n", 
+        (double) p->series_len / result->N);
     for (head = 0; head < tail; head ++) {
         assert(queue[head] != NULL);
         free_window(queue[head]);
@@ -2793,7 +2934,7 @@ int link_path_from(
     return_buffer((void **) stack);
     return_buffer((void **) queue_0);
     return_buffer((void **) stack_0);
-    return len;
+    return result;
 }
 
 polytope *gen_tube_polygon(
@@ -2805,9 +2946,9 @@ polytope *gen_tube_polygon(
     return p;
 }
 
-int link_path(series *s, double tau, double eta) {
+series *link_path(series *input, double tau, double eta) {
     polytope *p;
-    p = gen_tube_polygon(s, tau, eta);
+    p = gen_tube_polygon(input, tau, eta);
     /*
     assert(sprint_check_simple_polygon(string_buffer, p));
     printf("checked - %dms\n", clock() - START_TIME);
@@ -2824,58 +2965,49 @@ int link_path(series *s, double tau, double eta) {
             DESTINATION = p->vertices[i]->head;
         }
     }
-    printf("     - source: ");
-    print_edge(SOURCE);
-    printf("\n");
-    printf("     - destination: ");
-    print_edge(DESTINATION);
-    printf("\n");
-    printf("     - polygon size = %d\n", p->N);
+    if (SHOW_DETAIL) {
+        printf("     - source: ");
+        print_edge(SOURCE);
+        printf("\n");
+        printf("     - destination: ");
+        print_edge(DESTINATION);
+        printf("\n");
+        printf("     - polygon size = %d\n", p->N);
+    }
     printf("   - polygon generated - %dms\n", clock() - START_TIME);
     START_TIME = clock();
     triangulate_polygon(p);
-    vertex **result = (vertex **) get_buffer();
-    int len = link_path_from(p, SOURCE->from, SOURCE->to, result);
-    for (i = len - 1; i >= 0; i --) {
-        // output result[i];
-        assert(result[i] != NULL);
-        free_vertex(result[i]);
-    }
-    return_buffer((void **) result);
+    series *output;
+    output = link_path_from(p, SOURCE->from, SOURCE->to);
+    check_result(input, output, tau, eta);
+    printf("   - link distance computed - %dms\n", clock() - START_TIME);
+    START_TIME = clock();
     free_polytope(p);
-    return len;
+    return output;
 }
 
-void init(series **ret, int N) {
+void init() {
+    VERTEX_SEARCH_COUNT = 0;
+    FACET_SEARCH_COUNT = 0;
     START_TIME = clock();
     srand(time(0));
     new_pointer_buffers();
     new_bst();
-    VERTEX_SEARCH_COUNT = 0;
-    FACET_SEARCH_COUNT = 0;
-    VISITED_COUNT = 0;
-    TIME_DFS = 0;
-    TIME_PRETRI = 0;
-    TIME_RETRI = 0;
     funnel_count[0] = chain_node_count[0] = 0;
     funnel_count[1] = chain_node_count[1] = 0;
     window_count = 0;
     printf(" - initialization done - %dms\n", clock() - START_TIME);
     START_TIME = clock();
-    double dx = 30, dy = 1;
-    series *s;
-    s = gen_series(N, dx, dy);
-    //s = new_series_from("input.txt");
-    *ret = s;
 }
 
-void clear(series *s) {
-    printf("   - %d funnels and %d chain nodes allocated\n", 
-        funnel_count[1], chain_node_count[1]);
+void clear() {
+    if (SHOW_DETAIL) {
+        printf("   - %d funnels and %d chain nodes allocated\n", 
+            funnel_count[1], chain_node_count[1]);
+    }
+    assert(window_count == 0);
     assert(funnel_count[0] == 0);
     assert(chain_node_count[0] == 0);
-    assert(window_count == 0);
-    free_series(s);
     free_bst();
     free_pointer_buffers();
     printf(" - clear done - %dms\n", clock() - START_TIME);
@@ -2883,15 +3015,17 @@ void clear(series *s) {
 
 int main() {
     printf(" - start\n");
-    double tau = 3, eta = 0.1;
-    printf("   - error bound set: tau = %lf, eta = %lf\n", tau, eta);
-    series *s;
-    init(& s, 20000);
-    greedy_link_path(s, tau, eta);
-    DP_link_path(s, tau, eta);
-    printf(" - baseline done\n");
-    link_path(s, tau, eta);
+    init();
+    double tau = 10, eta = 0.333333;
+    printf(" - error bounds set: tau = %lf, eta = %lf\n", tau, eta);
+    series *s = gen_series(10000, 30, 1);
+    //series *s = new_series_from("input.txt");
+    free_series(greedy_link_path(s, tau, eta));
+    free_series(DP_link_path(s, tau, eta));
+    printf(" - baselines done\n");
+    free_series(link_path(s, tau, eta));
     printf(" - temporal compression done\n");
-    clear(s);
+    free_series(s);
+    clear();
     return EXIT_SUCCESS;
 }
