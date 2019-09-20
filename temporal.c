@@ -861,6 +861,7 @@ series *new_series(int N) {
 }
 
 void free_series(series *s) {
+    if (s == NULL) return ;
     int i;
     for (i = 0; i < s->N; i ++) 
         free(s->list[i]);
@@ -892,12 +893,12 @@ series *gen_series(int N, double dx, double dy) {
     for (i = 0; i < N; i ++) {
         // a bias of 0.01 is involved to avoid non-simple polygon
         // please use polygon division to get rid of this
-        x += rand_float(dx) + 0.005;
-        y += rand_float(dy) + 0.005;
+        x += rand_float(dx) + 0.001;
+        y += rand_float(dy) + 0.001;
         s->list[i][0] = x;
         s->list[i][1] = y;
     }
-    printf("   - sampling rate <= %lf, velocity <= %lf\n", 
+    printf("   - sampling rate <= %.3lf, velocity ~ %.3lf\n", 
         dy, dx / dy);
     printf("   - series length = %d\n", s->N);
     printf(" - series generated - %dms\n", clock() - START_TIME);
@@ -908,7 +909,7 @@ series *gen_series(int N, double dx, double dy) {
 void print_series(series *s) {
     int i;
     for (i = 0; i < s->N; i ++) 
-        printf("%lf,%lf ", s->list[i][0], s->list[i][1]);
+        printf("%.3lf,%.3lf ", s->list[i][0], s->list[i][1]);
     printf("\n");
 }
 
@@ -968,7 +969,7 @@ void check_result(series *s, series *t, double tau, double eta) {
             j ++;
         }
     }
-    printf("     - error: tau = %lf eta = %lf\n", tau_0, eta_0);
+    printf("     - error: tau = %.3lf eta = %.3lf\n", tau_0, eta_0);
 }
 
 series *greedy_link_path(series *s, double tau, double eta) {
@@ -1010,7 +1011,7 @@ series *greedy_link_path(series *s, double tau, double eta) {
     }
     return_buffer((void **) result);
     printf("     - links = %d\n", k);
-    printf("     - compression ratio = %lf\n", (double) s->N / k);
+    printf("     - compression ratio = %.3lf\n", (double) s->N / k);
     check_result(s, t, tau, eta);
     printf("   - baseline greedy computed - %dms\n", clock() - START_TIME);
     START_TIME = clock();
@@ -1054,7 +1055,7 @@ void DP_link_path_init_visible(
 series *DP_link_path(series *s, double tau, double eta) {
     if (s->N > SKIP_DP_N) {
         printf("   - baseline DP skipped\n");
-        return ;
+        return NULL;
     }
     vertex **result = (vertex **) get_buffer();
     int *opt = (int *) malloc(sizeof(int) * s->N);
@@ -1097,7 +1098,7 @@ series *DP_link_path(series *s, double tau, double eta) {
     }
     return_buffer((void **) result);
     printf("     - links = %d\n", opt[s->N - 1]);
-    printf("     - compression ratio = %lf\n", 
+    printf("     - compression ratio = %.3lf\n", 
         (double) s->N / opt[s->N - 1]);
     check_result(s, t, tau, eta);
     for (i = 0; i < s->N; i ++) 
@@ -2509,13 +2510,16 @@ int bi_depth_first_traverse(polytope *p,
                     queue, tail, to_split);
                 if (last_win == NULL && e->prev == DESTINATION) {
                     ret = 1;
-                    last_win = new_window(p, queue[*tail - 1]->v0, queue[*tail - 1]->v1, NULL, NULL);
+                    last_win = new_window(p, 
+                        queue[*tail - 1]->v0, queue[*tail - 1]->v1, 
+                        NULL, NULL);
                 }
             }
             else {
                 if (last_win == NULL && e->prev == DESTINATION) {
                     ret = 1;
-                    last_win = new_window(p, tan[0][1], tan[1][1], NULL, NULL);
+                    last_win = new_window(p, 
+                        tan[0][1], tan[1][1], NULL, NULL);
                 }
             }
             if (l1 != NULL) {
@@ -2572,13 +2576,16 @@ int bi_depth_first_traverse(polytope *p,
                     queue, tail, to_split);
                 if (last_win == NULL && e->next == DESTINATION) {
                     ret = 1;
-                    last_win = new_window(p, queue[*tail - 1]->v0, queue[*tail - 1]->v1, NULL, NULL);
+                    last_win = new_window(p, 
+                        queue[*tail - 1]->v0, queue[*tail - 1]->v1, 
+                        NULL, NULL);
                 }
             }
             else {
                 if (last_win == NULL && e->next == DESTINATION) {
                     ret = 1;
-                    last_win = new_window(p, tan[1][0], tan[0][0], NULL, NULL);
+                    last_win = new_window(p, 
+                        tan[1][0], tan[0][0], NULL, NULL);
                 }
             }
         }
@@ -2740,19 +2747,8 @@ series *link_path_from(polytope *p, vertex *s0, vertex *s1) {
                 p, e, fn0, fn1, queue, & tail))
             {
                 if (last_win->parent == NULL) {
-                    vertex *v = lines_intersect(
-                        last_win->v0, last_win->v1, 
-                        win->v0, win->v1);
-                    if (v == NULL) 
-                    {
-                        last_win->parent = win->parent;
-                        last_win->depth = win->depth;
-                    }
-                    else {
-                        last_win->parent = win;
-                        last_win->depth = win->depth + 1;
-                        free_vertex(v);
-                    }
+                    last_win->parent = win;
+                    last_win->depth = win->depth + 1;
                 }
             }
         free_funnel(fn0);
@@ -2921,7 +2917,7 @@ series *link_path_from(polytope *p, vertex *s0, vertex *s1) {
     assert(i == 0);
 
     printf("     - links = %d\n", result->N);
-    printf("     - compression ratio = %lf\n", 
+    printf("     - compression ratio = %.3lf\n", 
         (double) p->series_len / result->N);
     for (head = 0; head < tail; head ++) {
         assert(queue[head] != NULL);
@@ -2987,6 +2983,7 @@ series *link_path(series *input, double tau, double eta) {
 }
 
 void init() {
+    printf(" - start\n");
     VERTEX_SEARCH_COUNT = 0;
     FACET_SEARCH_COUNT = 0;
     START_TIME = clock();
@@ -3013,19 +3010,26 @@ void clear() {
     printf(" - clear done - %dms\n", clock() - START_TIME);
 }
 
-int main() {
-    printf(" - start\n");
-    init();
-    double tau = 10, eta = 0.333333;
-    printf(" - error bounds set: tau = %lf, eta = %lf\n", tau, eta);
-    series *s = gen_series(10000, 30, 1);
+void link_paths() {
+    double tau = 30, eta = 1;
+    printf(" - error bounds set: tau = %.3lf, eta = %.3lf\n", tau, eta);
     //series *s = new_series_from("input.txt");
-    free_series(greedy_link_path(s, tau, eta));
-    free_series(DP_link_path(s, tau, eta));
+    series *s = gen_series(10000, 30, 1);
+    series *t0, *t1, *t2;
+    t0 = greedy_link_path(s, tau, eta);
+    t1 = DP_link_path(s, tau, eta);
     printf(" - baselines done\n");
-    free_series(link_path(s, tau, eta));
-    printf(" - temporal compression done\n");
+    t2 = link_path(s, tau, eta);
+    free_series(t0);
+    free_series(t1);
+    free_series(t2);
     free_series(s);
+    printf(" - temporal compression done\n");
+}
+
+int main() {
+    init();
+    link_paths();
     clear();
     return EXIT_SUCCESS;
 }
