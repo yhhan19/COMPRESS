@@ -894,11 +894,11 @@ series *gen_series(int N, double dx, double dy) {
         // a bias of 0.01 is involved to avoid non-simple polygon
         // please use polygon division to get rid of this
         x += rand_float(dx) + 0.001;
-        y += rand_float(dy) + 0.001;
+        y += dy;
         s->list[i][0] = x;
         s->list[i][1] = y;
     }
-    printf("   - sampling rate <= %.3lf, velocity ~ %.3lf\n", 
+    printf("   - sampling rate = %.3lf, velocity ~ %.3lf\n", 
         dy, dx / dy);
     printf("   - series length = %d\n", s->N);
     printf(" - series generated - %dms\n", clock() - START_TIME);
@@ -976,12 +976,11 @@ series *greedy_link_path(series *s, double tau, double eta) {
     vertex **result = (vertex **) get_buffer();
     int i = 1, j = 0, k = 0;
     vertex low, high, origin;
-    origin.x = origin.y = 0;
     while (i < s->N) {
         if (k > 0) {
             vertex left, right, up, down, center;
-            center.x = s->list[i][1] - s->list[j][1];
-            center.y = s->list[i][0] - s->list[j][0];
+            center.x = s->list[i][1];
+            center.y = s->list[i][0];
             if (sgn(cross(& origin, & high, & origin, & center)) <= 0 && 
                 sgn(cross(& origin, & low, & origin, & center)) >= 0) 
             {
@@ -999,8 +998,10 @@ series *greedy_link_path(series *s, double tau, double eta) {
         }
         j = i - 1;
         result[k ++] = new_vertex(s->list[j][0], s->list[j][1], 0);
-        low.x = 0; low.y = - 1;
-        high.x = 0; high.y = 1;
+        origin.x = s->list[j][1];
+        origin.y = s->list[j][0];
+        high.x = origin.x; high.y = origin.y + 1;
+        low.x = origin.x; low.y = origin.y - 1;
     }
     result[k ++] = new_vertex(s->list[s->N - 1][0], s->list[s->N - 1][1], 0);
     series *t = new_series(k);
@@ -1018,6 +1019,127 @@ series *greedy_link_path(series *s, double tau, double eta) {
     return t;
 }
 
+series *greedy_link_path_2(series *s, double tau) {
+    vertex **result = (vertex **) get_buffer();
+    int i = 0, j = 0, k = 0, next;
+    while (i < s->N) {
+        int next, d0, d1;
+        vertex low[2], high[2], origin[2], last_high[2], last_low[2];
+        if (k > 0) {
+            if (d0 <= 0 || d1 <= 0) {
+                vertex up, down, center;
+                center.x = s->list[i][1];
+                center.y = s->list[i][0];
+                up.x = center.x; up.y = center.y + tau;
+                down.x = center.x; down.y = center.y - tau;
+                if (cross(& origin[0], & high[0], & origin[0], & up) < 0) 
+                    high[0] = up;
+                if (cross(& origin[0], & low[0], & origin[0], & down) > 0) 
+                    low[0] = down;
+                if (cross(& origin[1], & high[1], & origin[1], & up) < 0) 
+                    high[1] = up;
+                if (cross(& origin[1], & low[1], & origin[1], & down) > 0) 
+                    low[1] = down;
+                d0 = sgn(cross(& origin[0], & high[0], & origin[0], & low[0]));
+                d1 = sgn(cross(& origin[1], & high[1], & origin[1], & low[1]));
+                if (d0 <= 0 || d1 <= 0) {
+                    last_high[0] = high[0];
+                    last_low[0] = low[0];
+                    last_high[1] = high[1];
+                    last_low[1] =low[1];
+                    next = i;
+                }
+                i ++;
+                if (i == s->N) 
+                    goto last_vertex;
+                continue;
+            }
+        }
+        if (k == 0) {
+            j = 0;
+            i = 1;
+            origin[0].x = s->list[0][1];
+            origin[0].y = s->list[0][0] + tau;
+            origin[1].x = s->list[0][1];
+            origin[1].y = s->list[0][0] - tau;
+            // true results not computed yet
+            result[k ++] = new_vertex(s->list[0][0] + tau, s->list[0][0] - tau, 0);
+        }
+        else {
+            last_vertex :
+            j = next;
+            i = next + 1;
+            double y_high, y_low;
+            vertex up, down;
+            up.x = s->list[j][1]; up.y = s->list[j][0] + tau;
+            down.x = s->list[j][1]; down.y = s->list[j][0] - tau;
+            int d0 = sgn(cross(
+                & origin[0], & last_high[0], & origin[0], & last_low[0]));
+            int d1 = sgn(cross(
+                & origin[1], & last_high[1], & origin[1], & last_low[1]));
+            if (d0 > 0) {
+                assert(d1 <= 0);
+                y_high = yat(origin[1].x, origin[1].y, 
+                    last_high[1].x, last_high[1].y, s->list[j][1]);
+                y_low = yat(origin[1].x, origin[1].y, 
+                    last_low[1].x, last_low[1].y, s->list[j][1]);
+            }
+            else if (d1 > 0) {
+                assert(d0 <= 0);
+                y_high = yat(origin[0].x, origin[0].y, 
+                    last_high[0].x, last_high[0].y, s->list[j][1]);
+                y_low = yat(origin[0].x, origin[0].y, 
+                    last_low[0].x, last_low[0].y, s->list[j][1]);
+            }
+            else {
+                y_high = yat(origin[0].x, origin[0].y, 
+                    last_high[0].x, last_high[0].y, s->list[j][1]);
+                y_low = yat(origin[0].x, origin[0].y, 
+                    last_low[0].x, last_low[0].y, s->list[j][1]);
+                double y_high0, y_low0;
+                y_high0 = yat(origin[1].x, origin[1].y, 
+                    last_high[1].x, last_high[1].y, s->list[j][1]);
+                assert(sgn(y_low - y_high0) <= 0);
+                if (y_high0 > y_high) 
+                    y_high = y_high0;
+                y_low0 = yat(origin[1].x, origin[1].y, 
+                    last_low[1].x, last_low[1].y, s->list[j][1]);
+                assert(sgn(y_low0 - y_high) <= 0);
+                if (y_low0 < y_low) 
+                    y_low = y_low0;
+            }
+            // true results not computed yet
+            result[k ++] = new_vertex(y_high, y_low, j);
+            assert(sgn(y_low - y_high) <= 0);
+            assert(sgn((dabs(y_low - s->list[j][0]) - tau)) <= 0); 
+            assert(sgn((dabs(y_high - s->list[j][0]) - tau)) <= 0); 
+            origin[0].x = s->list[j][1];
+            origin[0].y = y_high;
+            origin[1].x = s->list[j][1];
+            origin[1].y = y_low;
+        }
+        high[0].x = origin[0].x; high[0].y = origin[0].y + 1;
+        low[0].x = origin[0].x; low[0].y = origin[0].y - 1;
+        high[1].x = origin[1].x; high[1].y = origin[1].y + 1;
+        low[1].x = origin[1].x; low[1].y = origin[1].y - 1;
+        d0 = d1 = -1;
+    }
+    // results not computed yet
+    series *t = new_series(k);
+    for (i = 0; i < k; i ++) {
+        t->list[i][0] = result[i]->x;
+        t->list[i][1] = result[i]->y;
+        free_vertex(result[i]);
+    }
+    return_buffer((void **) result);
+    printf("     - links = %d\n", k);
+    printf("     - compression ratio = %.3lf\n", (double) s->N / k);
+    // check_result(s, t, tau, eta);
+    printf("   - baseline greedy_2 computed - %dms\n", clock() - START_TIME);
+    START_TIME = clock();
+    return t;
+}
+
 void DP_link_path_init_visible(
     series *s, double tau, double eta, int **visible) 
 {
@@ -1028,15 +1150,17 @@ void DP_link_path_init_visible(
         }
     }
     vertex origin;
-    origin.x = origin.y = 0;
     for (i = 0; i < s->N; i ++) {
         vertex low, high;
-        low.x = 0; low.y = - 1;
-        high.x = 0; high.y = 1;
+        origin.x = s->list[i][1];
+        origin.y = s->list[i][0];
+        high.x = origin.x; high.y = origin.y + 1;
+        low.x = origin.x; low.y = origin.y - 1;
+        int flag = 0;
         for (j = i - 1; j >= 0; j --) {
             vertex left, right, up, down, center;
-            center.x = s->list[j][1] - s->list[i][1];
-            center.y = s->list[j][0] - s->list[i][0];
+            center.x = s->list[j][1];
+            center.y = s->list[j][0];
             left.x = center.x - eta; left.y = center.y;
             right.x = center.x + eta; right.y = center.y;
             up.x = center.x; up.y = center.y + tau;
@@ -1046,8 +1170,14 @@ void DP_link_path_init_visible(
             if (cross(& origin, & low, & origin, & down) < 0) low = down;
             if (cross(& origin, & low, & origin, & right) < 0) low = right;
             if (sgn(cross(& origin, & high, & origin, & center)) >= 0 && 
-                sgn(cross(& origin, & low, & origin, & center)) <= 0)
+                sgn(cross(& origin, & low, & origin, & center)) <= 0) 
+            {
                 visible[i][j] = 1;
+            }
+            if (cross(& origin, & high, & origin, & low) < 0) {
+                //assert(visible[i][j] == 0);
+                break;
+            }
         }
     }
 }
@@ -1602,80 +1732,6 @@ edge *connect_vertices_2(vertex *v1, vertex *v2, facet *internal) {
         ei = ei->prev->twin;
     } while (ei != v1->head);
     ej = v2->head;
-    do {
-        VERTEX_SEARCH_COUNT ++;
-        if (ej->left_hand == internal) break;
-        ej = ej->prev->twin;
-    } while (ej != v2->head);
-    assert(ei->left_hand == internal);
-    assert(ej->left_hand == internal);
-    
-    ej->prev->next = e1;
-    e1->prev = ej->prev;
-    ei->prev->next = e0;
-    e0->prev = ei->prev;
-
-    e0->next = ej;
-    ej->prev = e0;
-    e1->next = ei;
-    ei->prev = e1;
-
-    facet *f0 = ei->left_hand;
-    facet *f1 = new_facet();
-    if (ei->next->to == v2) {
-        e0->left_hand = f0;
-        e1->left_hand = f1;
-        f0->loop = e0;
-        f1->loop = e1;
-        for (ek = ei; ek->from != v2; ek = ek->next) {
-            FACET_SEARCH_COUNT ++;
-            assert(ek->left_hand == f0);
-            ek->left_hand = f1;
-        }
-        return e0;
-    }
-    else {
-        e0->left_hand = f1;
-        e1->left_hand = f0;
-        f0->loop = e1;
-        f1->loop = e0;
-        for (ek = ej; ek->from != v1; ek = ek->next) {
-            FACET_SEARCH_COUNT ++;
-            assert(ek->left_hand == f0);
-            ek->left_hand = f1;
-        }
-        return e0;
-    }
-}
-
-edge *connect_vertices_3(
-    vertex *v1, vertex *v2, facet *internal, edge *ev1, edge *ev2) 
-{
-    edge *e0 = new_edge();
-    edge *e1 = new_edge();
-    e0->twin = e1;
-    e1->twin = e0;
-    e0->from = v1; e0->to = v2;
-    e1->from = v2; e1->to = v1;
-    edge *ei, *ej, *ek;
-    
-    if (ev1 != NULL) {
-        assert(ev1->from == v1);
-        ei = ev1;
-    }
-    else 
-        ei = v1->head;
-    do {
-        VERTEX_SEARCH_COUNT ++;
-        if (ei->left_hand == internal) break;
-        ei = ei->prev->twin;
-    } while (ei != v1->head);
-    if (ev2 != NULL) {
-        assert(ev2->from == v2);
-        ej = ev2;
-    }
-    else 
-        ej = v2->head;
     do {
         VERTEX_SEARCH_COUNT ++;
         if (ej->left_hand == internal) break;
@@ -2848,14 +2904,12 @@ series *link_path_from(polytope *p, vertex *s0, vertex *s1) {
             if (e0 == NULL) {
                 edge *e;
                 if (w->e0 != NULL) {
-                    e = connect_vertices_3(w->v0, w->v1, 
-                        w->e0->twin->left_hand, 
-                        w->e0->twin, NULL);
+                    e = connect_vertices_2(w->v0, w->v1, 
+                        w->e0->twin->left_hand);
                 }
                 else if (w->e1 != NULL) {
-                    e = connect_vertices_3(w->v0, w->v1, 
-                        w->e1->twin->left_hand, 
-                        NULL, w->e1->twin);
+                    e = connect_vertices_2(w->v0, w->v1, 
+                        w->e1->twin->left_hand);
                 }
                 else assert(0);
                 assert(e->next->next != e);
@@ -2910,6 +2964,15 @@ series *link_path_from(polytope *p, vertex *s0, vertex *s1) {
         result->list[i][0] = res->x;
         result->list[i][1] = res->y;
         free_vertex(res);
+        if (i <= last_win->depth - 2) {
+            vertex *v0 = new_vertex(result->list[i][0], result->list[i][1], 0);
+            vertex *v1 = new_vertex(result->list[i + 1][0], result->list[i + 1][1], 0);
+            vertex *v2 = new_vertex(result->list[i + 2][0], result->list[i + 2][1], 0);
+            if (sgn(cross(v0, v1, v1, v2)) == 0)printf("%lf\n", cross(v0, v1, v1, v2));
+            free_vertex(v0);
+            free_vertex(v1);
+            free_vertex(v2);
+        }
         prev_win = cur_win;
         cur_win = cur_win->parent;
     }
@@ -2947,7 +3010,7 @@ series *link_path(series *input, double tau, double eta) {
     p = gen_tube_polygon(input, tau, eta);
     /*
     assert(sprint_check_simple_polygon(string_buffer, p));
-    printf("checked - %dms\n", clock() - START_TIME);
+    printf("     - checked - %dms\n", clock() - START_TIME);
     START_TIME = clock();
     */
     SOURCE = p->vertices[0]->head;
@@ -3011,18 +3074,27 @@ void clear() {
 }
 
 void link_paths() {
-    double tau = 30, eta = 1;
+    // the second greedy algorithm only takes into account tau\
+    so eta is set to a great value\
+    if eta is used this algorithm should not be considered
+    double tau = 10, eta = 1000;
     printf(" - error bounds set: tau = %.3lf, eta = %.3lf\n", tau, eta);
     //series *s = new_series_from("input.txt");
-    series *s = gen_series(10000, 30, 1);
-    series *t0, *t1, *t2;
+    series *s = gen_series(10000, 300, 10);
+    series *t0, *t1, *t2, *t3;
     t0 = greedy_link_path(s, tau, eta);
-    t1 = DP_link_path(s, tau, eta);
+    t1 = greedy_link_path_2(s, tau);
+    t2 = DP_link_path(s, tau, eta);
     printf(" - baselines done\n");
-    t2 = link_path(s, tau, eta);
+    t3 = link_path(s, tau, eta);
+    printf("   - improvement = %lf, %lf, %lf\n", 
+        (double) t0->N / t3->N - 1, 
+        (double) t1->N / t3->N - 1, 
+        t2 != NULL ? (double) t2->N / t3->N - 1 : 0);
     free_series(t0);
     free_series(t1);
     free_series(t2);
+    free_series(t3);
     free_series(s);
     printf(" - temporal compression done\n");
 }
